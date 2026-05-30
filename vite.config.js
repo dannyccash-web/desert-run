@@ -1,8 +1,7 @@
 import { defineConfig } from 'vite'
-import reactRefresh from '@vitejs/plugin-react-refresh'
-import reactJsx from 'vite-react-jsx'
+import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   base: '/desert-run/',
-  plugins: [reactJsx(), reactRefresh()],
+  plugins: [react()],
 })
