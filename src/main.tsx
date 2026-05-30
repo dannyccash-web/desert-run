@@ -4,9 +4,9 @@ import 'inter-ui'
 import './styles.css'
 import { App } from './App'
 
-useTexture.preload('/textures/heightmap_1024.png')
-useGLTF.preload('/models/track-draco.glb')
-useGLTF.preload('/models/chassis-draco.glb')
-useGLTF.preload('/models/wheel-draco.glb')
+useTexture.preload(`${import.meta.env.BASE_URL}textures/heightmap_1024.png`)
+useGLTF.preload(`${import.meta.env.BASE_URL}models/track-draco.glb`)
+useGLTF.preload(`${import.meta.env.BASE_URL}models/chassis-draco.glb`)
+useGLTF.preload(`${import.meta.env.BASE_URL}models/wheel-draco.glb`)
 
 createRoot(document.getElementById('root')!).render(<App />)
