@@ -1,36 +1,16 @@
-import { KeyboardControls, useKeyboardControls } from '@react-three/drei'
-import { useFrame, useThree } from '@react-three/fiber'
+import { useFrame } from '@react-three/fiber'
 import { CuboidCollider, type RapierRigidBody, RigidBody, useRapier } from '@react-three/rapier'
 import { useRef, useState } from 'react'
 import * as THREE from 'three'
 import { telemetry } from './store'
+import { getSpawn } from './Track'
+import { useControls } from './useControls'
 import { type WheelInfo, useVehicleController } from './useVehicleController'
 
-export const keyboardControlsMap = [
-  { name: 'forward', keys: ['ArrowUp', 'KeyW'] },
-  { name: 'back', keys: ['ArrowDown', 'KeyS'] },
-  { name: 'left', keys: ['ArrowLeft', 'KeyA'] },
-  { name: 'right', keys: ['ArrowRight', 'KeyD'] },
-  { name: 'brake', keys: ['Space'] },
-  { name: 'reset', keys: ['KeyR'] },
-]
+const spawn = getSpawn(0.0)
 
-type KeyControls = {
-  forward: boolean
-  back: boolean
-  left: boolean
-  right: boolean
-  brake: boolean
-  reset: boolean
-}
-
-const spawn = {
-  position: [0, 2, 0] as [number, number, number],
-  rotation: [0, 0, 0] as [number, number, number],
-}
-
-// Vehicle tuning
-const CHASSIS_HALF_EXTENTS: [number, number, number] = [1.0, 0.25, 2.0] // wide, short, long
+// Chassis: wide flat base, low CoG for stability
+const CHASSIS_HALF_EXTENTS: [number, number, number] = [1.0, 0.25, 2.0]
 const wheelBase = 1.5
 const wheelTrack = 0.9
 const wheelY = -0.15
@@ -45,8 +25,8 @@ const wheelInfo: Omit<WheelInfo, 'position'> = {
   radius: 0.35,
 }
 
+// front-left, front-right, rear-left, rear-right
 const wheels: WheelInfo[] = [
-  // front-left, front-right, rear-left, rear-right
   { position: new THREE.Vector3(-wheelTrack, wheelY, wheelBase), ...wheelInfo },
   { position: new THREE.Vector3(wheelTrack, wheelY, wheelBase), ...wheelInfo },
   { position: new THREE.Vector3(-wheelTrack, wheelY, -wheelBase), ...wheelInfo },
@@ -65,9 +45,9 @@ const _camPos = new THREE.Vector3()
 const _camTarget = new THREE.Vector3()
 const _linvel = new THREE.Vector3()
 
-function VehicleInner() {
+export function Vehicle() {
   const { rapier } = useRapier()
-  const [, getKeys] = useKeyboardControls<keyof KeyControls>()
+  const controls = useControls()
   const chassisMeshRef = useRef<THREE.Mesh>(null!)
   const chassisBodyRef = useRef<RapierRigidBody>(null!)
   const wheelsRef = useRef<(THREE.Object3D | null)[]>([])
@@ -81,27 +61,27 @@ function VehicleInner() {
     const controller = vehicleController.current
     if (!controller || !chassisMeshRef.current) return
     const chassisBody = controller.chassis()
-    const controls = getKeys()
+    const k = controls.current
 
-    // engine force on rear wheels
-    const engineForce = (Number(controls.forward) - Number(controls.back)) * ACCEL_FORCE
+    // engine force on rear wheels — note: forward is -Z in chassis local space
+    const engineForce = (Number(k.forward) - Number(k.back)) * ACCEL_FORCE
     controller.setWheelEngineForce(2, engineForce)
     controller.setWheelEngineForce(3, engineForce)
 
     // brake (all wheels)
-    const brake = Number(controls.brake) * BRAKE_FORCE
+    const brake = Number(k.brake) * BRAKE_FORCE
     for (let i = 0; i < 4; i++) controller.setWheelBrake(i, brake)
 
-    // steering on front wheels
-    const steerDir = Number(controls.left) - Number(controls.right)
+    // steering on front wheels — left key steers left
+    const steerDir = Number(k.left) - Number(k.right)
     const currentSteer = controller.wheelSteering(0) || 0
     const steering = THREE.MathUtils.lerp(currentSteer, STEER_ANGLE * steerDir, 0.25)
     controller.setWheelSteering(0, steering)
     controller.setWheelSteering(1, steering)
 
-    // reset on R or if launched too high
+    // reset on R or if launched too high / fell off the world
     const t = chassisBody.translation()
-    if (controls.reset || t.y < -10 || t.y > 80) {
+    if (k.reset || t.y < -10 || t.y > 80) {
       chassisBody.setTranslation(new rapier.Vector3(...spawn.position), true)
       const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(...spawn.rotation))
       chassisBody.setRotation(q, true)
@@ -139,7 +119,6 @@ function VehicleInner() {
       canSleep={false}
       mass={1}
     >
-      {/* Mass concentrated low for stability */}
       <CuboidCollider args={CHASSIS_HALF_EXTENTS} mass={1500} />
       <mesh ref={chassisMeshRef} castShadow>
         <boxGeometry args={[CHASSIS_HALF_EXTENTS[0] * 2, CHASSIS_HALF_EXTENTS[1] * 2, CHASSIS_HALF_EXTENTS[2] * 2]} />
@@ -171,13 +150,5 @@ function VehicleInner() {
         </group>
       ))}
     </RigidBody>
-  )
-}
-
-export function Vehicle() {
-  return (
-    <KeyboardControls map={keyboardControlsMap}>
-      <VehicleInner />
-    </KeyboardControls>
   )
 }
