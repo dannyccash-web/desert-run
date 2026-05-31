@@ -127,7 +127,7 @@ export function getSpawn(t = 0.0) {
   const tan = trackCurve.getTangentAt(t)
   const yaw = Math.atan2(tan.x, tan.z)
   return {
-    position: [pt.x, pt.y + 1.2, pt.z] as [number, number, number],
+    position: [pt.x, pt.y + 2.0, pt.z] as [number, number, number],
     rotation: [0, yaw, 0] as [number, number, number],
   }
 }

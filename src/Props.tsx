@@ -3,7 +3,9 @@ import { CuboidCollider, RigidBody } from '@react-three/rapier'
 import { useMemo } from 'react'
 import * as THREE from 'three'
 import { getTerrain } from './TerrainMesh'
-import { ROAD_HALF_WIDTH } from './Track'
+import { getSpawn, ROAD_HALF_WIDTH } from './Track'
+
+const SPAWN_EXCLUSION = 60 // metres — keep props well clear of the start area
 
 // Bounding-box data extracted from the GLBs (source units). `scale` is chosen
 // so each model lands at a reasonable Southwest-landscape size in metres.
@@ -26,7 +28,7 @@ const MODELS: ModelDef[] = [
 ]
 
 const NUM_PROPS = 110
-const ROAD_SAFETY = 4                          // metres between asphalt edge and any prop
+const ROAD_SAFETY = 6                          // metres between asphalt edge and any prop
 const TERRAIN_HALF = 380                       // keep within visible terrain
 
 // Deterministic seedable PRNG (Mulberry32). Fixed seed → fixed prop layout.
@@ -65,6 +67,13 @@ function placeProps(): Placement[] {
     const x = Math.cos(a) * r
     const z = Math.sin(a) * r
     if (Math.abs(x) > TERRAIN_HALF || Math.abs(z) > TERRAIN_HALF) continue
+
+    // Reject anything near the spawn — guarantees a clear bubble around
+    // the car and its chase camera at start.
+    const spawn = getSpawn(0)
+    const dxs = x - spawn.position[0]
+    const dzs = z - spawn.position[2]
+    if (Math.hypot(dxs, dzs) < SPAWN_EXCLUSION) continue
 
     // Pick model — hills favoured close to road, mountains further out
     const { distToRoad, y } = terrain.sample(x, z)
