@@ -1,22 +1,33 @@
 import { useGLTF } from '@react-three/drei'
+import { CuboidCollider, RigidBody } from '@react-three/rapier'
 import { useMemo } from 'react'
 import * as THREE from 'three'
 import { getTerrain } from './TerrainMesh'
 import { ROAD_HALF_WIDTH } from './Track'
 
-const MODELS = [
-  { url: 'models/Mountain_desert_001.glb', scale: 4.5, weight: 1 },
-  { url: 'models/Mountain_desert_005.glb', scale: 4.0, weight: 1 },
-  { url: 'models/Mountain_desert_008.glb', scale: 5.5, weight: 1 },
-  { url: 'models/Plateau_desert_002.glb', scale: 3.5, weight: 1 },
-  { url: 'models/Plateau_desert_004.glb', scale: 3.5, weight: 1 },
-  { url: 'models/Hill_desert_003.glb', scale: 2.5, weight: 1.5 },
-  { url: 'models/Hill_desert_005.glb', scale: 3.0, weight: 1.5 },
+// Bounding-box data extracted from the GLBs (source units). `scale` is chosen
+// so each model lands at a reasonable Southwest-landscape size in metres.
+// world size = source size × scale
+type ModelDef = {
+  url: string
+  scale: number
+  size: [number, number, number]   // source-unit XYZ extent
+  center: [number, number, number] // source-unit bbox center (offset from model origin)
+}
+
+const MODELS: ModelDef[] = [
+  { url: 'models/Hill_desert_003.glb',     scale: 0.0050, size: [5565,  787, 1862], center: [ 30,  393,  -27] }, // long ridge, ~28m
+  { url: 'models/Hill_desert_005.glb',     scale: 0.0055, size: [3536,  880, 2669], center: [ 13,  440, -184] }, // hill, ~19m
+  { url: 'models/Mountain_desert_001.glb', scale: 0.0110, size: [2300, 1663, 2300], center: [  0,  832,    0] }, // 25m peak
+  { url: 'models/Mountain_desert_005.glb', scale: 0.0120, size: [2470, 2151, 2432], center: [-14, 1076,   66] }, // 30m peak
+  { url: 'models/Mountain_desert_008.glb', scale: 0.0090, size: [5606, 2588, 2382], center: [-26, 1275,   41] }, // 50m ridge
+  { url: 'models/Plateau_desert_002.glb',  scale: 0.0095, size: [4921, 2273, 2624], center: [ 17, 1137, -162] }, // 47m plateau
+  { url: 'models/Plateau_desert_004.glb',  scale: 0.0095, size: [5388, 2125, 2820], center: [-94, 1063,  -77] }, // 51m plateau
 ]
 
 const NUM_PROPS = 110
-const MIN_DIST_FROM_ROAD = ROAD_HALF_WIDTH + 8 // never inside road or right at its edge
-const TERRAIN_HALF = 380                       // keep props inside the visible terrain bounds
+const ROAD_SAFETY = 4                          // metres between asphalt edge and any prop
+const TERRAIN_HALF = 380                       // keep within visible terrain
 
 // Deterministic seedable PRNG (Mulberry32). Fixed seed → fixed prop layout.
 function mulberry32(a: number) {
@@ -33,6 +44,10 @@ type Placement = {
   position: [number, number, number]
   rotationY: number
   scale: number
+  // Half-extents in world space (already includes scale jitter)
+  halfExtents: [number, number, number]
+  // Bbox-center offset in world space (relative to placement position)
+  centerOffset: [number, number, number]
 }
 
 function placeProps(): Placement[] {
@@ -40,38 +55,56 @@ function placeProps(): Placement[] {
   const terrain = getTerrain()
   const placements: Placement[] = []
   let attempts = 0
-  while (placements.length < NUM_PROPS && attempts < NUM_PROPS * 30) {
+  const MAX_ATTEMPTS = NUM_PROPS * 60
+
+  while (placements.length < NUM_PROPS && attempts < MAX_ATTEMPTS) {
     attempts++
-    // Sample in a ring around the track centre, biased outward
+    // Bias positions outward — uniform area sampling in a disc
     const r = Math.sqrt(rand()) * TERRAIN_HALF
     const a = rand() * Math.PI * 2
     const x = Math.cos(a) * r
     const z = Math.sin(a) * r
-
-    const { y, distToRoad } = terrain.sample(x, z)
-    if (distToRoad < MIN_DIST_FROM_ROAD) continue
     if (Math.abs(x) > TERRAIN_HALF || Math.abs(z) > TERRAIN_HALF) continue
 
-    // No props in the small fade band touching the road
-    if (distToRoad < MIN_DIST_FROM_ROAD + 2) continue
-
-    // Pick a model weighted toward smaller hills near the road, big mountains far
-    const farFactor = Math.min(1, distToRoad / 80)
+    // Pick model — hills favoured close to road, mountains further out
+    const { distToRoad, y } = terrain.sample(x, z)
+    const farFactor = Math.min(1, distToRoad / 70)
     let pickIdx: number
     if (farFactor > 0.6) {
       pickIdx = Math.floor(rand() * MODELS.length)
     } else {
-      // Closer to road, prefer hills (last two)
-      pickIdx = rand() < 0.7 ? 5 + Math.floor(rand() * 2) : Math.floor(rand() * MODELS.length)
+      pickIdx = rand() < 0.75 ? Math.floor(rand() * 2) : Math.floor(rand() * MODELS.length)
     }
-
     const model = MODELS[pickIdx]
+
     const scaleJitter = 0.7 + rand() * 0.6
+    const scale = model.scale * scaleJitter
+    const hx = (model.size[0] * scale) / 2
+    const hy = (model.size[1] * scale) / 2
+    const hz = (model.size[2] * scale) / 2
+
+    // Conservative "after any rotation" horizontal half-radius:
+    const circRadius = Math.hypot(hx, hz)
+
+    // Reject if the prop's bbox would reach the road
+    if (distToRoad - circRadius < ROAD_HALF_WIDTH + ROAD_SAFETY) continue
+
+    // Reject if the prop would poke past terrain edges
+    if (Math.abs(x) + circRadius > TERRAIN_HALF || Math.abs(z) + circRadius > TERRAIN_HALF) continue
+
+    const centerOffset: [number, number, number] = [
+      model.center[0] * scale,
+      model.center[1] * scale,
+      model.center[2] * scale,
+    ]
+
     placements.push({
       modelIndex: pickIdx,
-      position: [x, y - 0.3, z],
+      position: [x, y - 0.15, z],
       rotationY: rand() * Math.PI * 2,
-      scale: model.scale * scaleJitter,
+      scale,
+      halfExtents: [hx, hy, hz],
+      centerOffset,
     })
   }
   return placements
@@ -80,8 +113,8 @@ function placeProps(): Placement[] {
 const sandMaterial = new THREE.MeshStandardMaterial({ color: '#a87a4d', roughness: 1, metalness: 0 })
 
 function PropInstance({ placement }: { placement: Placement }) {
-  const { scene } = useGLTF(`${import.meta.env.BASE_URL}${MODELS[placement.modelIndex].url}`) as any
-  // Clone the scene per-instance so each transform is independent
+  const url = `${import.meta.env.BASE_URL}${MODELS[placement.modelIndex].url}`
+  const { scene } = useGLTF(url) as any
   const cloned = useMemo(() => {
     const c = (scene as THREE.Group).clone(true)
     c.traverse((obj) => {
@@ -94,13 +127,17 @@ function PropInstance({ placement }: { placement: Placement }) {
     })
     return c
   }, [scene])
+
   return (
-    <primitive
-      object={cloned}
+    <RigidBody
+      type="fixed"
       position={placement.position}
       rotation={[0, placement.rotationY, 0]}
-      scale={placement.scale}
-    />
+      colliders={false}
+    >
+      <CuboidCollider args={placement.halfExtents} position={placement.centerOffset} friction={0.9} />
+      <primitive object={cloned} scale={placement.scale} />
+    </RigidBody>
   )
 }
 
