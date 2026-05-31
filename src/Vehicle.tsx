@@ -2,6 +2,13 @@ import { useFrame } from '@react-three/fiber'
 import { CuboidCollider, type RapierRigidBody, RigidBody, useRapier } from '@react-three/rapier'
 import { useRef, useState } from 'react'
 import * as THREE from 'three'
+import {
+  initialGearboxState,
+  initialPedalState,
+  step as physicsStep,
+  type GearboxState,
+  type PedalState,
+} from './PhysicsModel'
 import { telemetry } from './store'
 import { getSpawn } from './Track'
 import { useControls } from './useControls'
@@ -14,6 +21,7 @@ const CHASSIS_HALF_EXTENTS: [number, number, number] = [1.0, 0.25, 2.0]
 const wheelBase = 1.5
 const wheelTrack = 0.9
 const wheelY = -0.15
+const WHEEL_RADIUS = 0.35
 
 const wheelInfo: Omit<WheelInfo, 'position'> = {
   axleCs: new THREE.Vector3(-1, 0, 0),
@@ -22,7 +30,7 @@ const wheelInfo: Omit<WheelInfo, 'position'> = {
   maxSuspensionTravel: 0.4,
   sideFrictionStiffness: 1.0,
   frictionSlip: 2.5,
-  radius: 0.35,
+  radius: WHEEL_RADIUS,
 }
 
 // front-left, front-right, rear-left, rear-right
@@ -33,10 +41,6 @@ const wheels: WheelInfo[] = [
   { position: new THREE.Vector3(wheelTrack, wheelY, -wheelBase), ...wheelInfo },
 ]
 
-const ACCEL_FORCE = 80
-const BRAKE_FORCE = 4
-const STEER_ANGLE = Math.PI / 7
-
 const cameraOffset = new THREE.Vector3(0, 3.5, -8)
 const cameraTargetOffset = new THREE.Vector3(0, 1.0, 0)
 
@@ -44,6 +48,7 @@ const _bodyPos = new THREE.Vector3()
 const _camPos = new THREE.Vector3()
 const _camTarget = new THREE.Vector3()
 const _linvel = new THREE.Vector3()
+const _quat = new THREE.Quaternion()
 
 export function Vehicle() {
   const { rapier } = useRapier()
@@ -54,6 +59,8 @@ export function Vehicle() {
 
   const { vehicleController } = useVehicleController(chassisBodyRef, wheelsRef, wheels)
 
+  const [pedals] = useState<PedalState>(initialPedalState)
+  const [gearbox] = useState<GearboxState>(initialGearboxState)
   const [smoothCamPos] = useState(new THREE.Vector3(0, 5, -12))
   const [smoothCamTarget] = useState(new THREE.Vector3())
 
@@ -62,44 +69,61 @@ export function Vehicle() {
     if (!controller || !chassisMeshRef.current) return
     const chassisBody = controller.chassis()
     const k = controls.current
+    const dt = Math.min(delta, 1 / 30) // cap dt for stability
+    const nowMs = state.clock.elapsedTime * 1000
 
-    // engine force on rear wheels — note: forward is -Z in chassis local space
-    const engineForce = (Number(k.forward) - Number(k.back)) * ACCEL_FORCE
-    controller.setWheelEngineForce(2, engineForce)
-    controller.setWheelEngineForce(3, engineForce)
+    // Sample a driven (rear) wheel's angular velocity. Rapier doesn't expose this
+    // cleanly, so we derive it from the vehicle's forward speed projected onto
+    // chassis local -Z (wheel rotation matches ground-speed at the contact point).
+    const v = chassisBody.linvel()
+    const linvel = _linvel.set(v.x, v.y, v.z)
+    const q = chassisBody.rotation()
+    _quat.set(q.x, q.y, q.z, q.w)
+    const forwardWorld = new THREE.Vector3(0, 0, 1).applyQuaternion(_quat)
+    const forwardSpeed = linvel.dot(forwardWorld)
+    const wheelAngVel = forwardSpeed / WHEEL_RADIUS
 
-    // brake (all wheels)
-    const brake = Number(k.brake) * BRAKE_FORCE
-    for (let i = 0; i < 4; i++) controller.setWheelBrake(i, brake)
+    // Run the realistic physics layer
+    const sim = physicsStep(k, pedals, gearbox, wheelAngVel, linvel, _quat, WHEEL_RADIUS, dt, nowMs)
 
-    // steering on front wheels — left key steers left
-    const steerDir = Number(k.left) - Number(k.right)
-    const currentSteer = controller.wheelSteering(0) || 0
-    const steering = THREE.MathUtils.lerp(currentSteer, STEER_ANGLE * steerDir, 0.25)
-    controller.setWheelSteering(0, steering)
-    controller.setWheelSteering(1, steering)
+    // Apply to Rapier: engine force on rear wheels, brakes split front/rear, steering on fronts
+    controller.setWheelEngineForce(2, sim.engineForce)
+    controller.setWheelEngineForce(3, sim.engineForce)
+    controller.setWheelBrake(0, sim.brakeFront)
+    controller.setWheelBrake(1, sim.brakeFront)
+    controller.setWheelBrake(2, sim.brakeRear)
+    controller.setWheelBrake(3, sim.brakeRear)
+    controller.setWheelSteering(0, sim.steerRad)
+    controller.setWheelSteering(1, sim.steerRad)
 
-    // reset on R or if launched too high / fell off the world
+    // Reset on R or out of world
     const t = chassisBody.translation()
     if (k.reset || t.y < -10 || t.y > 80) {
       chassisBody.setTranslation(new rapier.Vector3(...spawn.position), true)
-      const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(...spawn.rotation))
-      chassisBody.setRotation(q, true)
+      const sq = new THREE.Quaternion().setFromEuler(new THREE.Euler(...spawn.rotation))
+      chassisBody.setRotation(sq, true)
       chassisBody.setLinvel(new rapier.Vector3(0, 0, 0), true)
       chassisBody.setAngvel(new rapier.Vector3(0, 0, 0), true)
+      pedals.throttle = 0
+      pedals.brake = 0
+      pedals.steerRad = 0
+      gearbox.gear = 1
+      gearbox.lastShiftAt = 0
     }
 
-    // telemetry: speed in kph
-    const v = chassisBody.linvel()
-    const speed = _linvel.set(v.x, v.y, v.z).length()
-    telemetry.speedKph = speed * 3.6
+    // Telemetry
+    telemetry.speedKph = linvel.length() * 3.6
+    telemetry.rpm = sim.rpm
+    telemetry.gear = sim.gear
+    telemetry.throttle = pedals.throttle
+    telemetry.brake = pedals.brake
 
-    // follow camera: chase position is behind the car along its forward axis
+    // Chase camera
     const bodyMatrix = chassisMeshRef.current.matrixWorld
     _camPos.copy(cameraOffset).applyMatrix4(bodyMatrix)
     _camPos.y = Math.max(_camPos.y, chassisBody.translation().y + 2)
 
-    const blend = 1.0 - Math.pow(0.001, delta)
+    const blend = 1.0 - Math.pow(0.001, dt)
     smoothCamPos.lerp(_camPos, blend)
     state.camera.position.copy(smoothCamPos)
 
@@ -124,7 +148,6 @@ export function Vehicle() {
         <boxGeometry args={[CHASSIS_HALF_EXTENTS[0] * 2, CHASSIS_HALF_EXTENTS[1] * 2, CHASSIS_HALF_EXTENTS[2] * 2]} />
         <meshStandardMaterial color="#e23d3d" metalness={0.4} roughness={0.4} />
       </mesh>
-      {/* Cabin */}
       <mesh position={[0, CHASSIS_HALF_EXTENTS[1] + 0.25, -0.3]} castShadow>
         <boxGeometry args={[1.6, 0.5, 1.8]} />
         <meshStandardMaterial color="#7a1b1b" metalness={0.5} roughness={0.3} />

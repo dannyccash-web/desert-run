@@ -77,3 +77,37 @@ body {
   font-family: inherit;
   font-size: 0.9em;
 }
+
+.speedometer .gear {
+  font-size: clamp(14px, 1.3vw, 18px);
+  opacity: 0.7;
+  letter-spacing: 0.1em;
+  margin-bottom: 6px;
+}
+.speedometer .gear span {
+  font-weight: 700;
+  font-size: clamp(20px, 2vw, 28px);
+  margin-left: 6px;
+  color: #fff;
+  opacity: 1;
+}
+.speedometer .rpm-bar {
+  margin-top: 12px;
+  margin-left: auto;
+  width: clamp(200px, 22vw, 320px);
+  height: 8px;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.speedometer .rpm-fill {
+  height: 100%;
+  background: #f4c83f;
+  transition: background 100ms;
+}
+.speedometer .rpm-text {
+  margin-top: 4px;
+  font-size: clamp(11px, 1vw, 14px);
+  opacity: 0.7;
+  letter-spacing: 0.1em;
+}
