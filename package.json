@@ -1,7 +1,7 @@
 {
   "name": "desert-run",
-  "version": "0.2.0",
-  "description": "3D browser racing game with Rapier physics",
+  "version": "0.3.0",
+  "description": "3D browser driving — Rapier raycast vehicle (Isaac Mason base)",
   "type": "module",
   "scripts": {
     "dev": "vite",

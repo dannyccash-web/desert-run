@@ -1,17 +1,10 @@
-import { StrictMode } from 'react'
-import { createRoot } from 'react-dom/client'
+import React from 'react'
+import ReactDOM from 'react-dom/client'
 import './styles.css'
-import { App } from './App'
-import { HUD } from './HUD'
+import { Sketch } from './sketch'
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-)
-
-createRoot(document.getElementById('hud')!).render(
-  <StrictMode>
-    <HUD />
-  </StrictMode>,
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <Sketch />
+  </React.StrictMode>,
 )
