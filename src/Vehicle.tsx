@@ -96,6 +96,15 @@ export function Vehicle() {
     controller.setWheelSteering(0, sim.steerRad)
     controller.setWheelSteering(1, sim.steerRad)
 
+    // Parking brake: when the car is crawling and the brake is firmly held,
+    // zero linear + angular velocity so it actually stops dead instead of
+    // drifting on numerical noise.
+    const speedNow = linvel.length()
+    if (pedals.brake > 0.5 && speedNow < 0.6) {
+      chassisBody.setLinvel(new rapier.Vector3(0, 0, 0), true)
+      chassisBody.setAngvel(new rapier.Vector3(0, 0, 0), true)
+    }
+
     // Reset on R or out of world
     const t = chassisBody.translation()
     if (k.reset || t.y < -10 || t.y > 80) {

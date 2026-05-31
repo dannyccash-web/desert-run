@@ -166,7 +166,7 @@ export function updateSteering(currentRad: number, dir: number, speedMps: number
 // ---------- Brake bias ----------
 // 60% front, 40% rear (typical road car bias)
 export const BrakeBias = { front: 0.6, rear: 0.4 }
-export const MaxBrakeForce = 1.5 // Rapier wheel-brake units per wheel
+export const MaxBrakeForce = 12 // Rapier wheel-brake units per wheel
 
 // ---------- Aero drag ----------
 // A tiny linear drag in the chassis longitudinal direction so the car
@@ -247,8 +247,11 @@ export function step(
   const sinceShift = nowMs - gearbox.lastShiftAt
   gearbox.clutch = Math.min(1, sinceShift / Gearbox.shiftCooldownMs)
 
-  // 5. Engine torque (idle = at least some torque to keep car alive)
-  let torque = engineTorque(rpm, Math.max(pedals.throttle, rpm < Engine.idleRPM * 1.1 ? 0.08 : 0))
+  // 5. Engine torque. Idle creep only when not braking. When the brake is held
+  // firmly, kill engine drive entirely so the car can actually stop.
+  const brakingHard = pedals.brake > 0.5
+  const idleThrottle = (!brakingHard && rpm < Engine.idleRPM * 1.1) ? 0.08 : 0
+  let torque = engineTorque(rpm, brakingHard ? 0 : Math.max(pedals.throttle, idleThrottle))
 
   // 6. RPM limiter — cut torque when over limit
   if (rpm >= Engine.rpmLimit) torque = 0
@@ -257,7 +260,7 @@ export function step(
   const ratio = gearRatio(gearbox.gear)
   const driveForce = (torque * ratio * Gearbox.finalDrive * gearbox.clutch * Engine.outputScale) / wheelRadius
 
-  // 8. Engine braking: when off-throttle and in gear, apply a small reverse force
+  // 8. Engine braking: when off-throttle and in gear, apply a reverse force
   let engineBrake = 0
   if (pedals.throttle < 0.05 && gearbox.gear !== 0 && Math.abs(forwardSpeed) > 0.5) {
     engineBrake = Math.sign(forwardSpeed) * (rpm / Engine.rpmLimit) * Engine.outputScale * Engine.engineBrakingScale
